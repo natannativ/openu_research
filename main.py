@@ -1,9 +1,20 @@
 # -*- coding: utf-8 -*-
 from psychopy import visual, core, gui, data, event
 from psychopy.hardware import keyboard
+from bidi.algorithm import get_display
 import random
 import csv
 import os
+
+def rtl(text):
+    # PsychoPy's TextStim renders characters in logical order. Hebrew needs
+    # the bidi algorithm applied per-line so RTL display is correct while
+    # multi-line layout is preserved.
+    return "\n".join(get_display(line) for line in text.split("\n"))
+
+# macOS ships Arial Hebrew with proper Hebrew glyph metrics; the default Arial
+# kerns Hebrew unevenly because it isn't tuned for the script.
+HEBREW_FONT = "Arial Hebrew"
 
 # =========================
 # SETTINGS
@@ -17,8 +28,14 @@ STIM_TIMEOUT = 2.0
 ITI = 0.12
 PROBE_SCALE = ["1", "2", "3", "4"]
 
-# ASRT fixed pattern: 2-r-4-r-3-r-1-r
-ASRT_PATTERN = [2, None, 4, None, 3, None, 1, None]
+# ASRT pattern: 4 fixed positions, cycled 10 times per block.
+# Block layout follows vekteo/ASRT_jsPsych: a random "lead-in" at trial 1
+# (preceded by INITIAL_DELAY), then alternating pattern/random from trial 2
+# onwards, ending on a pattern at trial 80. So patterns sit at trial numbers
+# 2, 4, 6, ..., 80 and randoms at 1, 3, 5, ..., 79.
+ASRT_PATTERN = [2, 4, 3, 1]
+INITIAL_DELAY = 1.0            # blank delay (seconds) before the first stim of each block
+SHOW_BLOCK_FEEDBACK = True     # 5-second accuracy/RT screen after each block
 
 # Key mapping for ASRT positions
 POS_KEYS = {
@@ -38,12 +55,15 @@ POS_COORDS = {
 
 # n-back stimuli
 NBACK_STIMULI = ["A", "B", "C", "D", "E", "F"]
+NBACK_TARGET_RATE = 0.25       # injected target rate on eligible trials (after the n_back_level lead-in)
 
 # =========================
 # PARTICIPANT INFO
 # =========================
 info = {
     "participant": "",
+    "age": "",
+    "vision": ["normal", "corrected"],
     "condition": ["low_load", "high_load"],   # low = 1-back, high = 2-back
     "fullscreen": True
 }
@@ -53,6 +73,8 @@ if not dlg.OK:
     core.quit()
 
 participant = info["participant"]
+age = info["age"]
+vision = info["vision"]
 condition = info["condition"]
 fullscreen = info["fullscreen"]
 
@@ -68,6 +90,7 @@ out_path = os.path.join(os.getcwd(), filename)
 fieldnames = [
     "participant", "condition", "n_back_level",
     "block", "trial_in_block", "global_trial",
+    "p_or_r",  # "P" pattern / "R" random, matches vekteo
     "asrt_position", "asrt_correct_key", "asrt_response", "asrt_correct", "asrt_rt",
     "nback_letter", "nback_target", "nback_response", "nback_correct",
     "triplet", "triplet_type",
@@ -95,7 +118,7 @@ nback_text = visual.TextStim(win, text="", pos=(0, 0.18), color="white", height=
 
 instructions = visual.TextStim(
     win,
-    text=(
+    text=rtl(
         "ברוך/ה הבא/ה לניסוי.\n\n"
         "בכל ניסיון יופיע עיגול לבן באחד מ-4 מיקומים על המסך.\n"
         "יש ללחוץ מהר ובדיוק על המקש המתאים:\n\n"
@@ -111,31 +134,42 @@ instructions = visual.TextStim(
     ),
     color="white",
     height=0.035,
-    wrapWidth=1.2
+    wrapWidth=1.2,
+    font=HEBREW_FONT
 )
 
-probe_text = visual.TextStim(win, text="", color="white", height=0.04, wrapWidth=1.2)
+probe_text = visual.TextStim(win, text="", color="white", height=0.04, wrapWidth=1.2, font=HEBREW_FONT)
 end_text = visual.TextStim(
     win,
-    text="תודה רבה על השתתפותך!\n\nלחצ/י SPACE לסיום.",
+    text=rtl(
+        "תודה רבה על השתתפותך!\n\n"
+        "תיאור קצר של המחקר:\n"
+        "במטלה היה דפוס נסתר במיקומי העיגול — לסירוגין, מיקום קבוע (לפי הסדר 2→4→3→1) ומיקום אקראי. "
+        "אנו בודקים האם אנשים לומדים דפוסים סטטיסטיים כאלה ללא מודעות, וכיצד עומס קוגניטיבי (n-back) משפיע על למידה זו.\n\n"
+        "אם יש לך שאלות לגבי המחקר, ניתן לפנות לחוקרים.\n\n"
+        "לחצ/י SPACE לסיום."
+    ),
     color="white",
-    height=0.05
+    height=0.035,
+    wrapWidth=1.5,
+    font=HEBREW_FONT
 )
 
 awareness_question = visual.TextStim(
     win,
-    text=(
+    text=rtl(
         "האם הבחנת בדפוס או חוקיות כלשהם במהלך המטלה?\n\n"
         "Y = כן\nN = לא"
     ),
     color="white",
     height=0.045,
-    wrapWidth=1.2
+    wrapWidth=1.2,
+    font=HEBREW_FONT
 )
 
 practice_instructions = visual.TextStim(
     win,
-    text=(
+    text=rtl(
         "לפני המטלה האמיתית — בלוק תרגול קצר.\n\n"
         "עיגול יופיע באחד מ-4 מיקומים. לחצ/י S / F / J / L.\n"
         "במרכז תופיע אות; אם היא זהה לאות מלפני N צעדים — לחצ/י רווח.\n\n"
@@ -143,15 +177,37 @@ practice_instructions = visual.TextStim(
     ),
     color="white",
     height=0.035,
-    wrapWidth=1.2
+    wrapWidth=1.2,
+    font=HEBREW_FONT
 )
 
 practice_done_text = visual.TextStim(
     win,
-    text="התרגול הסתיים.\n\nלחצ/י SPACE להתחלת המטלה האמיתית.",
+    text=rtl("התרגול הסתיים.\n\nלחצ/י SPACE להתחלת המטלה האמיתית."),
     color="white",
     height=0.04,
-    wrapWidth=1.2
+    wrapWidth=1.2,
+    font=HEBREW_FONT
+)
+
+# Between-block rest screen; text is set per-block before drawing.
+break_text = visual.TextStim(
+    win,
+    text="",
+    color="white",
+    height=0.04,
+    wrapWidth=1.2,
+    font=HEBREW_FONT
+)
+
+# Per-block feedback (accuracy + mean RT). Text set per-block before drawing.
+feedback_text = visual.TextStim(
+    win,
+    text="",
+    color="white",
+    height=0.04,
+    wrapWidth=1.4,
+    font=HEBREW_FONT
 )
 
 # =========================
@@ -164,18 +220,47 @@ def draw_trial(position, letter):
     nback_text.draw()
 
 def get_asrt_sequence_for_block():
-    """Return 80-item sequence from 10 repeats of 8-item alternating cycle."""
-    seq = []
-    for _ in range(10):
-        for item in ASRT_PATTERN:
-            if item is None:
-                seq.append(random.choice([1, 2, 3, 4]))
-            else:
-                seq.append(item)
+    """Build an 80-trial ASRT block matching vekteo/ASRT_jsPsych:
+
+      trial 1     : random lead-in
+      trial 2     : pattern element 0 (= 2)
+      trial 3     : random
+      trial 4     : pattern element 1 (= 4)
+      ...
+      trial 80    : pattern element 3 (= 1, last of the 10th cycle)
+
+    Pattern slots at even trial numbers (2,4,...,80) — 40 patterns total.
+    Random slots at odd trial numbers (1,3,...,79) — 40 randoms total.
+    """
+    seq = [random.choice([1, 2, 3, 4])]  # trial 1: random lead-in
+    for rep in range(10):
+        for sp in range(4):
+            seq.append(ASRT_PATTERN[sp])              # pattern at even trial
+            if not (rep == 9 and sp == 3):            # no trailing random after last pattern
+                seq.append(random.choice([1, 2, 3, 4]))  # random at next odd trial
     return seq
 
-def get_nback_sequence(length):
-    return [random.choice(NBACK_STIMULI) for _ in range(length)]
+def get_nback_sequence(length, n_back):
+    """Generate an n-back letter sequence with a calibrated target rate.
+
+    First `n_back` letters are random (no valid n-back history yet). For each
+    subsequent position, with probability NBACK_TARGET_RATE the letter is set
+    equal to seq[i - n_back] (injected target); otherwise it is sampled from
+    the 5 letters that are NOT equal to seq[i - n_back], guaranteeing a
+    non-target. Resulting target rate on eligible trials is exactly NBACK_TARGET_RATE.
+    """
+    seq = []
+    for i in range(length):
+        if i < n_back:
+            seq.append(random.choice(NBACK_STIMULI))
+            continue
+        ref = seq[i - n_back]
+        if random.random() < NBACK_TARGET_RATE:
+            seq.append(ref)
+        else:
+            non_targets = [s for s in NBACK_STIMULI if s != ref]
+            seq.append(random.choice(non_targets))
+    return seq
 
 def build_high_triplets():
     # From pattern: 2-X-4, 4-X-3, 3-X-1, 1-X-2
@@ -189,11 +274,23 @@ def build_high_triplets():
 HIGH_TRIPLETS = build_high_triplets()
 
 def classify_triplet(prev2, prev1, current):
+    # Labels follow vekteo/ASRT_jsPsych (dataUpdate.js): H high, L low,
+    # R repetition (X-X-X), T trill (X-Y-X with X!=Y), X exclude (no triplet
+    # history yet). Order matters: high is checked first. R and T are
+    # mutually exclusive with each other and (by ASRT construction) cannot
+    # overlap with H, but the explicit order documents the convention.
     if prev2 is None or prev1 is None:
-        return "", ""
+        return "", "X"
     tri = (prev2, prev1, current)
     tri_str = f"{tri[0]}-{tri[1]}-{tri[2]}"
-    tri_type = "high" if tri in HIGH_TRIPLETS else "low"
+    if tri in HIGH_TRIPLETS:
+        tri_type = "H"
+    elif tri[0] == tri[1] == tri[2]:
+        tri_type = "R"
+    elif tri[0] == tri[2] and tri[0] != tri[1]:
+        tri_type = "T"
+    else:
+        tri_type = "L"
     return tri_str, tri_type
 
 def quit_experiment():
@@ -241,7 +338,7 @@ win.flip()
 wait_for_space()
 
 practice_positions = [random.choice([1, 2, 3, 4]) for _ in range(N_PRACTICE_TRIALS)]
-practice_nback = get_nback_sequence(N_PRACTICE_TRIALS)
+practice_nback = get_nback_sequence(N_PRACTICE_TRIALS, n_back_level)
 
 for trial_idx in range(N_PRACTICE_TRIALS):
     asrt_pos = practice_positions[trial_idx]
@@ -287,10 +384,14 @@ global_trial_counter = 0
 
 for block in range(1, N_BLOCKS + 1):
     block_seq = get_asrt_sequence_for_block()
-    block_nback = get_nback_sequence(TRIALS_PER_BLOCK)
+    block_nback = get_nback_sequence(TRIALS_PER_BLOCK, n_back_level)
 
     prev_positions = []
     block_rows = []
+
+    # Vekteo's initialDelay: blank ~1s before the first stim of each block
+    win.flip()
+    core.wait(INITIAL_DELAY)
 
     for trial_idx in range(TRIALS_PER_BLOCK):
         global_trial_counter += 1
@@ -356,13 +457,19 @@ for block in range(1, N_BLOCKS + 1):
 
         prev_positions.append(asrt_pos)
 
+        # vekteo convention: trial 1 = random lead-in, then patterns at even trial
+        # numbers (2, 4, ...) and randoms at odd (3, 5, ...). trial_idx is 0-based.
+        trial_number_1based = trial_idx + 1
+        p_or_r = "P" if (trial_number_1based >= 2 and trial_number_1based % 2 == 0) else "R"
+
         row = {
             "participant": participant,
             "condition": condition,
             "n_back_level": n_back_level,
             "block": block,
-            "trial_in_block": trial_idx + 1,
+            "trial_in_block": trial_number_1based,
             "global_trial": global_trial_counter,
+            "p_or_r": p_or_r,
             "asrt_position": asrt_pos,
             "asrt_correct_key": asrt_key,
             "asrt_response": asrt_response,
@@ -387,23 +494,29 @@ for block in range(1, N_BLOCKS + 1):
     # Thought probes after block
     # -------------------------
     probe_focus = run_probe(
-        "עד כמה היית מרוכז/ת במשימה ממש לפני הופעת השאלה?\n\n"
-        "1 = בכלל לא\n2 = מעט\n3 = די מרוכז/ת\n4 = מאוד",
+        rtl(
+            "עד כמה היית מרוכז/ת במשימה ממש לפני הופעת השאלה?\n\n"
+            "1 = בכלל לא\n2 = מעט\n3 = די מרוכז/ת\n4 = מאוד"
+        ),
         ["1", "2", "3", "4"]
     )
 
     probe_content = run_probe(
-        "אם לא היית מרוכז/ת לגמרי, מה הכי תיאר את החוויה שלך?\n\n"
-        "1 = מחשבות בעלות תוכן\n"
-        "2 = ריק מנטלי / blank\n"
-        "3 = לא בטוח/ה\n"
-        "4 = הייתי ממוקד/ת במשימה",
+        rtl(
+            "אם לא היית מרוכז/ת לגמרי, מה הכי תיאר את החוויה שלך?\n\n"
+            "1 = מחשבות בעלות תוכן\n"
+            "2 = ריק מנטלי / blank\n"
+            "3 = לא בטוח/ה\n"
+            "4 = הייתי ממוקד/ת במשימה"
+        ),
         ["1", "2", "3", "4"]
     )
 
     probe_spontaneous = run_probe(
-        "אם הקשב שלך נדד, האם זה קרה באופן:\n\n"
-        "1 = ספונטני\n2 = מכוון\n3 = גם וגם\n4 = לא נדד",
+        rtl(
+            "אם הקשב שלך נדד, האם זה קרה באופן:\n\n"
+            "1 = ספונטני\n2 = מכוון\n3 = גם וגם\n4 = לא נדד"
+        ),
         ["1", "2", "3", "4"]
     )
 
@@ -414,6 +527,39 @@ for block in range(1, N_BLOCKS + 1):
         row["probe_spontaneous"] = probe_spontaneous
         csv_writer.writerow(row)
     csv_file.flush()
+
+    # Per-block ASRT feedback (vekteo-style: accuracy + mean RT, ~5s display)
+    if SHOW_BLOCK_FEEDBACK:
+        correct_rows = [r for r in block_rows if r["asrt_correct"] == 1]
+        accuracy_pct = round(len(correct_rows) / len(block_rows) * 100)
+        rts = [r["asrt_rt"] for r in correct_rows if r["asrt_rt"] is not None]
+        mean_rt_ms = round(sum(rts) / len(rts) * 1000) if rts else 0
+        if accuracy_pct < 90:
+            msg = "נסה/י להיות מדויק/ת יותר."
+        elif mean_rt_ms > 350:
+            msg = "אפשר לנסות לענות מהר יותר."
+        else:
+            msg = "המשך/י כך!"
+        feedback_text.text = rtl(
+            f"סיום בלוק {block}\n\n"
+            f"דיוק: {accuracy_pct}%\n"
+            f"זמן תגובה ממוצע: {mean_rt_ms} ms\n\n"
+            f"{msg}"
+        )
+        feedback_text.draw()
+        win.flip()
+        core.wait(5.0)
+
+    # Between-block break (skip after the last block — awareness comes next)
+    if block < N_BLOCKS:
+        break_text.text = rtl(
+            f"סיימת בלוק {block} מתוך {N_BLOCKS}.\n\n"
+            "אפשר לקחת הפסקה קצרה.\n\n"
+            "לחצ/י SPACE כדי להמשיך."
+        )
+        break_text.draw()
+        win.flip()
+        wait_for_space()
 
 # done writing per-trial data
 csv_file.close()
@@ -433,12 +579,17 @@ while True:
         awareness_response = keys[0].name
         break
 
-session_fields = ["participant", "condition", "n_back_level", "timestamp", "awareness_response"]
+session_fields = [
+    "participant", "age", "vision", "condition", "n_back_level",
+    "timestamp", "awareness_response"
+]
 with open(session_path, "w", newline="", encoding="utf-8-sig") as sf:
     session_writer = csv.DictWriter(sf, fieldnames=session_fields)
     session_writer.writeheader()
     session_writer.writerow({
         "participant": participant,
+        "age": age,
+        "vision": vision,
         "condition": condition,
         "n_back_level": n_back_level,
         "timestamp": timestamp,
