@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Experiment output (participant data is not source)
+data_*.csv
+session_*.csv
+
+# IDE / editor
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Archives / reference material
+*.zip
+ASRT_jsPsych/
