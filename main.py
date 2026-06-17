@@ -121,6 +121,7 @@ win = visual.Window(
     color="black",
     units="height"
 )
+win.mouseVisible = False  # hide the mouse cursor during the experiment
 
 kb = keyboard.Keyboard()
 
