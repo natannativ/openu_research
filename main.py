@@ -7,35 +7,37 @@ import csv
 import os
 
 def rtl(text):
-    # Apply the bidi algorithm per line so Hebrew displays RTL.
     return "\n".join(get_display(line) for line in text.split("\n"))
 
 HEBREW_FONT = "Arial Hebrew"
+KEY_S = "S"
+KEY_F = "F"
+KEY_J = "J"
+KEY_L = "L"
 
 # =========================
 # SETTINGS
 # =========================
-# Full run: 25 blocks * 80 trials ~ 85 min. short_version overrides to a pilot.
-N_BLOCKS = 25
-N_SEQUENCE_REPS = 10                     # repetitions of the 4-item pattern per block
-TRIALS_PER_BLOCK = N_SEQUENCE_REPS * 8   # 8 trials per cycle (4 P + 4 R)
-N_PRACTICE_TRIALS = 80                   # random-position practice, not saved
+# Full run: 20 blocks * 32 trials (~27 min). short_version overrides to a pilot.
+N_BLOCKS = 20
+N_SEQUENCE_REPS = 4
+TRIALS_PER_BLOCK = N_SEQUENCE_REPS * 8   # 8 trials per cycle (4 P + 4 R) -> 32
+N_PRACTICE_TRIALS = 40                   # not saved
 
-SHORT_N_BLOCKS = 3
-SHORT_N_SEQUENCE_REPS = 5                # 40 trials per block
-SHORT_N_PRACTICE_TRIALS = 20
+SHORT_N_BLOCKS = 1
+SHORT_N_SEQUENCE_REPS = 2
+SHORT_N_PRACTICE_TRIALS = 8
 
-ITI = 0.12                     # RSI: blank gap between trials (vekteo rsi = 120 ms)
-INITIAL_DELAY = 1.0            # delay before the first stim of each block
-NBACK_RESPONSE_WINDOW = 1.5    # fixed window (from letter onset) to press SPACE
-ASRT_MAX_ATTEMPTS = 15         # safety cap on the correction loop (vekteo limit)
+ITI = 0.12                     # blank gap between trials (s)
+INITIAL_DELAY = 1.0            # before the first stim of each block (s)
+NBACK_RESPONSE_WINDOW = 1.2    # fixed window from letter onset to press SPACE (s)
+ASRT_MAX_ATTEMPTS = 15         # safety cap on the correction loop
 NBACK_WARNING_THRESHOLD = 0.5  # warn if block n-back hit rate falls below this
-PRACTICE_NBACK_FEEDBACK = True # immediate n-back feedback, practice only
+PRACTICE_NBACK_FEEDBACK = True
 SHOW_BLOCK_FEEDBACK = True
 PROBE_SCALE = ["1", "2", "3", "4"]
 
-# 24 permutations of [1,2,3,4]; the per-participant pattern is chosen from these
-# (counterbalancing, as in vekteo/variables.js). ASRT_PATTERN is set after the dialog.
+# 24 permutations of [1,2,3,4]; per-participant pattern chosen from these (counterbalancing).
 ASRT_SEQUENCES = [
     [1, 2, 3, 4], [1, 2, 4, 3], [1, 3, 2, 4], [1, 3, 4, 2], [1, 4, 2, 3], [1, 4, 3, 2],
     [2, 1, 3, 4], [2, 1, 4, 3], [2, 3, 1, 4], [2, 3, 4, 1], [2, 4, 1, 3], [2, 4, 3, 1],
@@ -43,7 +45,7 @@ ASRT_SEQUENCES = [
     [4, 1, 2, 3], [4, 1, 3, 2], [4, 2, 1, 3], [4, 2, 3, 1], [4, 3, 1, 2], [4, 3, 2, 1],
 ]
 
-POS_KEYS = {1: "s", 2: "f", 3: "j", 4: "l"}            # position -> response key
+POS_KEYS = {1: "s", 2: "f", 3: "j", 4: "l"}
 POS_COORDS = {1: (-0.45, 0.0), 2: (-0.15, 0.0), 3: (0.15, 0.0), 4: (0.45, 0.0)}
 
 NBACK_STIMULI = ["A", "B", "C", "D", "E", "F"]
@@ -55,26 +57,40 @@ NBACK_TARGET_RATE = 0.25       # target rate on eligible trials
 info = {
     "participant": "",
     "age": "",
-    "vision": ["normal", "corrected"],
-    "condition": ["low_load", "high_load"],   # low = 0-back (ignore letter), high = 1-back
-    "short_version": False,                   # piloting flag — shorter run
+    "gender": ["female", "male", "other"],
+    "ADHD": ["no", "yes", "unsure"],
+    "condition": ["low_load", "high_load"],   # low = 1-back, high = 2-back
+    "short_version": False,
     "fullscreen": True
 }
 
-dlg = gui.DlgFromDict(info, title="ASRT + Mind Wandering + Visual n-back")
+dlg = gui.DlgFromDict(
+    info,
+    title="ASRT + Mind Wandering + Visual n-back",
+    order=["participant", "age", "gender", "ADHD", "condition", "short_version", "fullscreen"],
+    sortKeys=False,
+)
 if not dlg.OK:
     core.quit()
 
 participant = info["participant"]
 age = info["age"]
-vision = info["vision"]
+gender = info["gender"]
+adhd = info["ADHD"]
 condition = info["condition"]
 short_version = info["short_version"]
 fullscreen = info["fullscreen"]
 
-n_back_level = 0 if condition == "low_load" else 1
+n_back_level = 1 if condition == "low_load" else 2
 
-# Reproducible per-participant sequence (random for non-numeric ids).
+if n_back_level == 1:
+    nback_step_phrase = "לאות שהופיעה בניסיון הקודם"
+elif n_back_level == 2:
+    nback_step_phrase = "לאות שהופיעה שני ניסיונות אחורה"
+else:
+    nback_step_phrase = f"לאות שהופיעה {n_back_level} ניסיונות אחורה"
+
+# Reproducible per-participant sequence; random for non-numeric ids.
 def select_asrt_sequence(participant_id):
     try:
         n = int(str(participant_id).strip())
@@ -100,11 +116,12 @@ out_path = os.path.join(os.getcwd(), filename)
 
 fieldnames = [
     "participant", "condition", "n_back_level", "asrt_sequence",
-    "block", "trial_in_block", "global_trial",
+    "block", "epoch", "trial_in_block", "global_trial",
     "p_or_r",  # "P" pattern / "R" random
     "asrt_position", "asrt_correct_key", "asrt_response", "asrt_correct", "asrt_rt",
     "asrt_n_attempts",
     "nback_letter", "nback_target", "nback_response", "nback_correct",
+    "after_letter_test",  # 1 if the previous trial triggered a miss gate (exclude from RT)
     "triplet", "triplet_type",
     "probe_focus", "probe_content", "probe_spontaneous"
 ]
@@ -119,13 +136,14 @@ win = visual.Window(
     size=[1400, 900],
     fullscr=fullscreen,
     color="black",
-    units="height"
+    units="height",
+    useRetina=True  # full pixel density so text isn't blurry on Mac Retina
 )
-win.mouseVisible = False  # hide the mouse cursor during the experiment
+win.mouseVisible = False
 
 kb = keyboard.Keyboard()
 
-# Constant grid of 4 outline circles; the active target is a filled circle on top.
+# Constant grid of 4 outline circles; active target is a filled circle on top.
 PLACEHOLDER_RADIUS = 0.025
 placeholder_stims = [
     visual.Circle(
@@ -145,22 +163,22 @@ if n_back_level == 0:
 else:
     nback_paragraph = (
         "בנוסף, תופיע במרכז המסך אות.\n"
-        "אם האות הנוכחית זהה לאות שהופיעה בניסיון הקודם — לחצ/י רווח.\n\n"
+        f"אם האות הנוכחית זהה {nback_step_phrase} — לחצ/י רווח.\n\n"
     )
 
 instructions = visual.TextStim(
     win,
     text=rtl(
         "ברוך/ה הבא/ה לניסוי.\n\n"
-        "בכל ניסיון יופיע עיגול לבן באחד מ-4 מיקומים על המסך.\n"
-        "יש ללחוץ מהר ובדיוק על המקש המתאים:\n\n"
-        "S = שמאל חיצוני\n"
-        "F = שמאל פנימי\n"
-        "J = ימין פנימי\n"
-        "L = ימין חיצוני\n\n"
+        "בכל ניסיון יופיע עיגול לבן באחד מארבעה מיקומים.\n"
+        "לחצ/י מהר ובמדויק על המקש המתאים:\n\n"
+        f"שמאל חיצוני — מקש {KEY_S}\n"
+        f"שמאל פנימי — מקש {KEY_F}\n"
+        f"ימין פנימי — מקש {KEY_J}\n"
+        f"ימין חיצוני — מקש {KEY_L}\n\n"
         + nback_paragraph +
-        "אחרי כל בלוק תופיע/נה שאלה/שאלות קצרות.\n\n"
-        "לחצ/י SPACE כדי להתחיל."
+        "אחרי כל בלוק יופיעו כמה שאלות קצרות.\n\n"
+        "לחצ/י על מקש הרווח כדי להתחיל."
     ),
     color="white",
     height=0.035,
@@ -174,14 +192,16 @@ end_text = visual.TextStim(
     text=rtl(
         "תודה רבה על השתתפותך!\n\n"
         "תיאור קצר של המחקר:\n"
-        f"במטלה היה דפוס נסתר במיקומי העיגול — לסירוגין, מיקום קבוע (לפי הסדר {'→'.join(str(p) for p in ASRT_PATTERN)}) ומיקום אקראי. "
-        "אנו בודקים האם אנשים לומדים דפוסים סטטיסטיים כאלה ללא מודעות, וכיצד עומס קוגניטיבי (n-back) משפיע על למידה זו.\n\n"
+        "במטלה היה דפוס נסתר במיקומי העיגול —\n"
+        f"לסירוגין מיקום קבוע (לפי הסדר {'→'.join(str(p) for p in ASRT_PATTERN)}) ומיקום אקראי.\n"
+        "אנו בודקים האם אנשים לומדים דפוסים סטטיסטיים כאלה ללא מודעות,\n"
+        "וכיצד עומס קוגניטיבי (מטלת הזיכרון של האותיות) משפיע על למידה זו.\n\n"
         "אם יש לך שאלות לגבי המחקר, ניתן לפנות לחוקרים.\n\n"
-        "לחצ/י SPACE לסיום."
+        "לחצ/י על מקש הרווח לסיום."
     ),
     color="white",
-    height=0.035,
-    wrapWidth=1.5,
+    height=0.03,
+    wrapWidth=1.6,
     font=HEBREW_FONT
 )
 
@@ -201,16 +221,21 @@ if n_back_level == 0:
     practice_nback_line = "במרכז תופיע אות — אפשר להתעלם ממנה.\n\n"
 else:
     practice_nback_line = (
-        "במרכז תופיע אות; אם היא זהה לאות מהניסיון הקודם — לחצ/י רווח.\n\n"
+        f"במרכז תופיע אות; אם היא זהה {nback_step_phrase} — לחצ/י רווח.\n\n"
     )
 
 practice_instructions = visual.TextStim(
     win,
     text=rtl(
-        "לפני המטלה האמיתית — בלוק תרגול קצר.\n\n"
-        "עיגול יופיע באחד מ-4 מיקומים. לחצ/י S / F / J / L.\n"
+        "נתחיל בתרגול קצר.\n\n"
+        "כשמופיע עיגול — לחצ/י על המקש שמתאים למיקום שלו:\n\n"
+        f"שמאל חיצוני — מקש {KEY_S}\n"
+        f"שמאל פנימי — מקש {KEY_F}\n"
+        f"ימין פנימי — מקש {KEY_J}\n"
+        f"ימין חיצוני — מקש {KEY_L}\n\n"
         + practice_nback_line +
-        "התרגול אינו נשמר. לחצ/י על מקש תגובה (S/F/J/L) כדי להתחיל."
+        "התרגול אינו נשמר.\n\n"
+        "לחצ/י על אחד ממקשי התגובה כדי להתחיל."
     ),
     color="white",
     height=0.035,
@@ -220,14 +245,13 @@ practice_instructions = visual.TextStim(
 
 practice_done_text = visual.TextStim(
     win,
-    text=rtl("התרגול הסתיים.\n\nלחצ/י על מקש תגובה (S/F/J/L) להתחלת המטלה האמיתית."),
+    text=rtl("התרגול הסתיים.\n\nלחצ/י על אחד ממקשי התגובה להתחלת המטלה האמיתית."),
     color="white",
     height=0.04,
     wrapWidth=1.2,
     font=HEBREW_FONT
 )
 
-# Between-block rest screen; text is set per-block before drawing.
 break_text = visual.TextStim(
     win,
     text="",
@@ -237,7 +261,7 @@ break_text = visual.TextStim(
     font=HEBREW_FONT
 )
 
-# Per-block feedback (accuracy + mean RT). Text set per-block before drawing.
+# Per-block feedback (accuracy + mean RT).
 feedback_text = visual.TextStim(
     win,
     text="",
@@ -247,7 +271,7 @@ feedback_text = visual.TextStim(
     font=HEBREW_FONT
 )
 
-# Low n-back accuracy warning (high_load only). Text set per-block before drawing.
+# Low n-back accuracy warning.
 nback_warning_text = visual.TextStim(
     win,
     text="",
@@ -257,13 +281,38 @@ nback_warning_text = visual.TextStim(
     font=HEBREW_FONT
 )
 
-# Immediate per-trial n-back feedback (practice only). Color/text set per trial.
+# Immediate per-trial n-back feedback (practice only).
 nback_practice_fb = visual.TextStim(
     win,
     text="",
     color="white",
     height=0.045,
     pos=(0, -0.2),
+    wrapWidth=1.4,
+    font=HEBREW_FONT
+)
+
+# Mind-wandering probe / explanation screens.
+mw_text = visual.TextStim(
+    win,
+    text="",
+    color="white",
+    height=0.032,
+    wrapWidth=1.5,
+    font=HEBREW_FONT
+)
+
+# Gate shown when a target letter repeat is missed in the real task.
+nback_miss_text = visual.TextStim(
+    win,
+    text=rtl(
+        "פספסת את האות!\n\n"
+        "האות חזרה ולא לחצת רווח.\n"
+        "חשוב לעקוב אחרי האות במרכז המסך.\n\n"
+        "לחצ/י על אחד ממקשי התגובה כדי להמשיך."
+    ),
+    color="red",
+    height=0.04,
     wrapWidth=1.4,
     font=HEBREW_FONT
 )
@@ -289,21 +338,18 @@ def present_pre_target(is_first_trial):
     core.wait(INITIAL_DELAY if is_first_trial else ITI)
 
 def run_asrt_nback_trial(asrt_pos, nback_letter):
-    """Run one ASRT + n-back trial; return its responses.
+    """Run one ASRT + n-back trial and return its responses.
 
-    The target + frozen letter appear together. Incorrect s/f/j/l presses keep
-    the target on screen until the correct key is pressed (correction loop).
-
-    The n-back response window is FIXED: SPACE counts only within
-    NBACK_RESPONSE_WINDOW seconds from letter onset, and the letter stays
-    visible for exactly that window regardless of ASRT speed. The trial ends
-    once the correct ASRT key has been given AND the fixed window has elapsed.
-    Scoring uses the FIRST keypress; ASRT_MAX_ATTEMPTS is a safety cap.
+    Incorrect s/f/j/l presses keep the target on screen until the correct key
+    (correction loop). SPACE is accepted any time during the trial so a press is
+    never lost. NBACK_RESPONSE_WINDOW is a fixed minimum trial length from letter
+    onset. Scoring uses the first ASRT keypress; ASRT_MAX_ATTEMPTS is a safety cap.
     """
     asrt_key = POS_KEYS[asrt_pos]
 
     kb.clearEvents()
-    clock = core.Clock()  # t = 0 is letter onset
+    kb.clock.reset()      # key.rt measured from letter onset
+    clock = core.Clock()
 
     asrt_response = None
     asrt_rt = None
@@ -316,15 +362,13 @@ def run_asrt_nback_trial(asrt_pos, nback_letter):
 
     while True:
         now = clock.getTime()
-        letter_visible = now < NBACK_RESPONSE_WINDOW
 
         draw_placeholders()
         if not correct_given:
             target_stim.pos = POS_COORDS[asrt_pos]
             target_stim.draw()
-        if letter_visible:
-            nback_text.text = nback_letter
-            nback_text.draw()
+        nback_text.text = nback_letter
+        nback_text.draw()
         win.flip()
 
         keys = kb.getKeys(keyList=["s", "f", "j", "l", "space", "escape"], waitRelease=False)
@@ -340,7 +384,7 @@ def run_asrt_nback_trial(asrt_pos, nback_letter):
                     first_recorded = True
                 if k.name == asrt_key and not correct_given:
                     correct_given = True
-            elif k.name == "space" and letter_visible and not nback_response:
+            elif k.name == "space" and not nback_response:
                 nback_response = 1
 
         if correct_given and now >= NBACK_RESPONSE_WINDOW:
@@ -356,6 +400,10 @@ def run_asrt_nback_trial(asrt_pos, nback_letter):
         "nback_response": nback_response,
     }
 
+def trial_type(trial_number_1based):
+    # Pattern at even trial numbers (>=2); random otherwise (trial 1 = lead-in).
+    return "P" if (trial_number_1based >= 2 and trial_number_1based % 2 == 0) else "R"
+
 def get_asrt_sequence_for_block():
     # Random lead-in (trial 1), then pattern/random alternating; ends on a
     # pattern (no trailing random). N_SEQUENCE_REPS * 8 trials total.
@@ -368,9 +416,10 @@ def get_asrt_sequence_for_block():
                 seq.append(random.choice([1, 2, 3, 4]))
     return seq
 
-def get_nback_sequence(length, n_back):
-    # 0-back: uniform random letters. n>=1: inject targets at NBACK_TARGET_RATE
-    # on eligible trials, otherwise force a non-target.
+def get_nback_sequence(trial_types, n_back):
+    # Targets (letter repeats) only on RANDOM ("R") trials, so the letter task
+    # never disturbs the pattern-triplet RTs.
+    length = len(trial_types)
     if n_back == 0:
         return [random.choice(NBACK_STIMULI) for _ in range(length)]
     seq = []
@@ -379,7 +428,8 @@ def get_nback_sequence(length, n_back):
             seq.append(random.choice(NBACK_STIMULI))
             continue
         ref = seq[i - n_back]
-        if random.random() < NBACK_TARGET_RATE:
+        is_random = (trial_types[i] == "R")
+        if is_random and random.random() < NBACK_TARGET_RATE:
             seq.append(ref)
         else:
             non_targets = [s for s in NBACK_STIMULI if s != ref]
@@ -392,8 +442,7 @@ def is_nback_target(letters, index):
             and letters[index] == letters[index - n_back_level])
 
 def build_high_triplets():
-    # High triplets are P-x-P where the pattern positions are consecutive
-    # (with wrap-around); the middle can be any position.
+    # P-x-P where pattern positions are consecutive (wrap-around); middle is any.
     high = set()
     bases = [(ASRT_PATTERN[i], ASRT_PATTERN[(i + 1) % 4]) for i in range(4)]
     for first, third in bases:
@@ -428,7 +477,6 @@ def quit_experiment():
     core.quit()
 
 def show_feedback(title, accuracy_pct, mean_rt_ms, nback_stats=None):
-    # ~5 s feedback: ASRT accuracy + mean RT, plus n-back summary if provided.
     if accuracy_pct < 90:
         msg = "נסה/י להיות מדויק/ת יותר."
     elif mean_rt_ms > 350:
@@ -441,7 +489,7 @@ def show_feedback(title, accuracy_pct, mean_rt_ms, nback_stats=None):
         "",
         "מטלת העיגול:",
         f"דיוק: {accuracy_pct}%",
-        f"זמן תגובה ממוצע: {mean_rt_ms} ms",
+        f"זמן תגובה ממוצע: {mean_rt_ms} מילישניות",
     ]
 
     if nback_stats is not None:
@@ -455,14 +503,14 @@ def show_feedback(title, accuracy_pct, mean_rt_ms, nback_stats=None):
         if n_targets > 0 and n_hits / n_targets < 0.6:
             msg = "שימי לב גם לאות במרכז — לחצי רווח כשהיא חוזרת."
 
-    lines += ["", msg]
+    lines += ["", msg, "", "לחצ/י על אחד ממקשי התגובה כדי להמשיך."]
     feedback_text.text = rtl("\n".join(lines))
     feedback_text.draw()
     win.flip()
-    core.wait(5.0)
+    core.wait(PROBE_SETTLE)  # so a prior keypress can't skip the screen
+    wait_for_response_key()
 
 def show_nback_practice_feedback(nback_target, nback_response):
-    # Practice-only: brief flash so participants learn the letter task.
     # No feedback for correct rejections (non-target, no press) to keep pace.
     if n_back_level < 1:
         return
@@ -480,7 +528,7 @@ def show_nback_practice_feedback(nback_target, nback_response):
     win.flip()
     core.wait(0.9)
 
-PROBE_SETTLE = 0.35  # ignore keys this long so the previous answer can't carry over
+PROBE_SETTLE = 0.35  # ignore keys this long so a previous answer can't carry over (s)
 
 def run_probe(question_text, allowed_keys):
     probe_text.text = question_text
@@ -508,7 +556,6 @@ def wait_for_space():
             return
 
 def wait_for_response_key():
-    # Self-paced screens advance on any response key.
     kb.clearEvents()
     while True:
         keys = kb.getKeys(keyList=["s", "f", "j", "l", "escape"], waitRelease=False)
@@ -516,6 +563,19 @@ def wait_for_response_key():
             if keys[0].name == "escape":
                 quit_experiment()
             return
+
+def show_nback_miss_gate():
+    nback_miss_text.draw()
+    win.flip()
+    core.wait(PROBE_SETTLE)
+    wait_for_response_key()
+
+def show_mw_info(body):
+    mw_text.text = rtl(body + "\n\nלחצ/י על מקש הרווח כדי להמשיך.")
+    mw_text.draw()
+    win.flip()
+    core.wait(PROBE_SETTLE)
+    wait_for_space()
 
 # =========================
 # START
@@ -532,7 +592,7 @@ win.flip()
 wait_for_response_key()
 
 practice_positions = [random.choice([1, 2, 3, 4]) for _ in range(N_PRACTICE_TRIALS)]
-practice_nback = get_nback_sequence(N_PRACTICE_TRIALS, n_back_level)
+practice_nback = get_nback_sequence(["R"] * N_PRACTICE_TRIALS, n_back_level)
 
 practice_correct_count = 0
 practice_rts = []
@@ -549,7 +609,7 @@ for trial_idx in range(N_PRACTICE_TRIALS):
     if PRACTICE_NBACK_FEEDBACK:
         show_nback_practice_feedback(nb_target, result["nback_response"])
 
-    draw_placeholders()  # keep the grid up between trials
+    draw_placeholders()
     win.flip()
 
 if SHOW_BLOCK_FEEDBACK:
@@ -560,6 +620,43 @@ if SHOW_BLOCK_FEEDBACK:
 practice_done_text.draw()
 win.flip()
 wait_for_response_key()
+
+# =========================
+# MIND-WANDERING PROBE EXPLANATION
+# =========================
+show_mw_info(
+    "במהלך המטלה נעצור מדי פעם ונשאל 3 שאלות קצרות.\n\n"
+    "השאלות מתייחסות למה שהיה לך בראש ממש לפני שהמסך נעצר.\n\n"
+    "אין תשובה טובה או רעה — פשוט ענה/י לפי מה שבאמת קרה."
+)
+
+show_mw_info(
+    "שאלה 1 — ריכוז:\n"
+    "עד כמה היית מרוכז/ת במשימה?\n\n"
+    "1 = בכלל לא    2 = מעט    3 = די מרוכז/ת    4 = מאוד מרוכז/ת\n\n"
+    "אם חשבת על דברים אחרים — בחר/י 1 או 2.\n"
+    "אם היית מרוכז/ת במטלה — בחר/י 3 או 4."
+)
+
+show_mw_info(
+    "אם תשומת הלב שלך לא הייתה ממוקדת לגמרי במטלה,\n"
+    "מה הכי מתאים למה שעבר לך בראש?\n\n"
+    "1 = הראש היה ריק לגמרי — לא חשבתי על שום דבר מסוים\n"
+    "2 = הראש היה בעיקר ריק — אולי הייתה מחשבה קצרה או לא ברורה\n"
+    "3 = בעיקר מחשבה על משהו מסוים\n"
+    "4 = חשבתי על משהו מסוים וברור"
+)
+
+show_mw_info(
+    "האם מיקוד הקשב שלך — במטלה או מחוץ למטלה —\n"
+    "היה מכוון או התרחש באופן ספונטני?\n\n"
+    "1 = התרחש לגמרי באופן ספונטני\n"
+    "2 = בעיקר ספונטני\n"
+    "3 = בעיקר מכוון\n"
+    "4 = מכוון לגמרי"
+)
+
+show_mw_info("עכשיו מתחילים את המטלה האמיתית.")
 
 # =========================
 # OPEN PER-TRIAL CSV (incremental, per-block flush)
@@ -574,15 +671,17 @@ csv_file.flush()
 # =========================
 global_trial_counter = 0
 
-# Targets of correctly-answered trials (whole session); triplets are built from
-# the last two correct positions + current target (vekteo).
+# Positions of correctly-answered trials; triplets use the last two + current.
 correct_positions = []
 
 for block in range(1, N_BLOCKS + 1):
     block_seq = get_asrt_sequence_for_block()
-    block_nback = get_nback_sequence(TRIALS_PER_BLOCK, n_back_level)
+    block_trial_types = [trial_type(t) for t in range(1, TRIALS_PER_BLOCK + 1)]
+    block_nback = get_nback_sequence(block_trial_types, n_back_level)
+    epoch = (block - 1) // 4 + 1  # 5 epochs of 4 blocks
 
     block_rows = []
+    prev_trial_gated = False
 
     for trial_idx in range(TRIALS_PER_BLOCK):
         global_trial_counter += 1
@@ -602,12 +701,11 @@ for block in range(1, N_BLOCKS + 1):
         nback_response = result["nback_response"]
         nback_correct = int(nback_response == nback_target)
 
-        # Patterns sit at even trial numbers, randoms at odd (trial 1 = lead-in).
         trial_number_1based = trial_idx + 1
-        p_or_r = "P" if (trial_number_1based >= 2 and trial_number_1based % 2 == 0) else "R"
+        p_or_r = trial_type(trial_number_1based)
+        after_letter_test = 1 if prev_trial_gated else 0
 
-        # Triplet from the last two correct positions + current target; X until
-        # there are two prior correct trials (and for the first two trials).
+        # X until there are two prior correct trials (and for the first two).
         if trial_number_1based <= 2 or len(correct_positions) < 2:
             triplet_str, triplet_type = "", "X"
         else:
@@ -624,6 +722,7 @@ for block in range(1, N_BLOCKS + 1):
             "n_back_level": n_back_level,
             "asrt_sequence": ASRT_SEQUENCE_STR,
             "block": block,
+            "epoch": epoch,
             "trial_in_block": trial_number_1based,
             "global_trial": global_trial_counter,
             "p_or_r": p_or_r,
@@ -637,6 +736,7 @@ for block in range(1, N_BLOCKS + 1):
             "nback_target": nback_target,
             "nback_response": nback_response,
             "nback_correct": nback_correct,
+            "after_letter_test": after_letter_test,
             "triplet": triplet_str,
             "triplet_type": triplet_type,
             "probe_focus": "",
@@ -645,38 +745,47 @@ for block in range(1, N_BLOCKS + 1):
         }
         block_rows.append(row)
 
-        draw_placeholders()  # keep the grid up between trials
+        draw_placeholders()
         win.flip()
 
-    # Thought probes after the block
+        # Gate on a missed target (no SPACE) before the next trial.
+        this_trial_gated = (nback_target == 1 and nback_response == 0)
+        if this_trial_gated:
+            show_nback_miss_gate()
+        prev_trial_gated = this_trial_gated
+
     probe_focus = run_probe(
         rtl(
-            "עד כמה היית מרוכז/ת במשימה ממש לפני הופעת השאלה?\n\n"
-            "1 = בכלל לא\n2 = מעט\n3 = די מרוכז/ת\n4 = מאוד"
+            "עד כמה היית מרוכז/ת במשימה ממש לפני שהשאלה הופיעה?\n\n"
+            "1 = בכלל לא\n2 = מעט\n3 = די מרוכז/ת\n4 = מאוד מרוכז/ת"
         ),
         PROBE_SCALE
     )
 
     probe_content = run_probe(
         rtl(
-            "אם לא היית מרוכז/ת לגמרי, מה הכי תיאר את החוויה שלך?\n\n"
-            "1 = מחשבות בעלות תוכן\n"
-            "2 = ריק מנטלי / blank\n"
-            "3 = לא בטוח/ה\n"
-            "4 = הייתי ממוקד/ת במשימה"
+            "אם תשומת הלב שלך לא הייתה ממוקדת לגמרי במטלה,\n"
+            "מה הכי מתאים למה שעבר לך בראש?\n\n"
+            "1 = הראש היה ריק לגמרי — לא חשבתי על שום דבר מסוים\n"
+            "2 = הראש היה בעיקר ריק — אולי הייתה מחשבה קצרה או לא ברורה\n"
+            "3 = בעיקר מחשבה על משהו מסוים\n"
+            "4 = חשבתי על משהו מסוים וברור"
         ),
         PROBE_SCALE
     )
 
     probe_spontaneous = run_probe(
         rtl(
-            "אם הקשב שלך נדד, האם זה קרה באופן:\n\n"
-            "1 = ספונטני\n2 = מכוון\n3 = גם וגם\n4 = לא נדד"
+            "האם מיקוד הקשב שלך — במטלה או מחוץ למטלה —\n"
+            "היה מכוון או התרחש באופן ספונטני?\n\n"
+            "1 = התרחש לגמרי באופן ספונטני\n"
+            "2 = בעיקר ספונטני\n"
+            "3 = בעיקר מכוון\n"
+            "4 = מכוון לגמרי"
         ),
         PROBE_SCALE
     )
 
-    # Attach the block's probe answers to its rows and write them out.
     for row in block_rows:
         row["probe_focus"] = probe_focus
         row["probe_content"] = probe_content
@@ -684,7 +793,6 @@ for block in range(1, N_BLOCKS + 1):
         csv_writer.writerow(row)
     csv_file.flush()
 
-    # n-back stats (high_load only): used for feedback and the warning.
     nback_stats = None
     if n_back_level >= 1:
         n_targets = sum(1 for r in block_rows if r["nback_target"] == 1)
@@ -702,7 +810,6 @@ for block in range(1, N_BLOCKS + 1):
         mean_rt_ms = round(sum(rts) / len(rts) * 1000) if rts else 0
         show_feedback(f"סיום בלוק {block}", accuracy_pct, mean_rt_ms, nback_stats)
 
-    # Warn (self-paced) if n-back hit rate is too low.
     if nback_stats is not None:
         n_targets, n_hits, n_misses, n_false_alarms = nback_stats
         hit_rate = (n_hits / n_targets) if n_targets > 0 else 1.0
@@ -711,19 +818,18 @@ for block in range(1, N_BLOCKS + 1):
                 "שימי לב!\n\n"
                 f"זיהית רק {n_hits} מתוך {n_targets} חזרות של האות.\n"
                 "חשוב לעקוב גם אחרי האות במרכז המסך,\n"
-                "וללחוץ רווח בכל פעם שהיא זהה לאות הקודמת.\n\n"
-                "לחצ/י על מקש תגובה (S/F/J/L) כדי להמשיך."
+                f"וללחוץ רווח בכל פעם שהיא זהה {nback_step_phrase}.\n\n"
+                "לחצ/י על אחד ממקשי התגובה כדי להמשיך."
             )
             nback_warning_text.draw()
             win.flip()
             wait_for_response_key()
 
-    # Between-block break (skipped after the last block).
     if block < N_BLOCKS:
         break_text.text = rtl(
             f"סיימת בלוק {block} מתוך {N_BLOCKS}.\n\n"
             "אפשר לקחת הפסקה קצרה.\n\n"
-            "לחצ/י על מקש תגובה (S/F/J/L) כדי להמשיך."
+            "לחצ/י על אחד ממקשי התגובה כדי להמשיך."
         )
         break_text.draw()
         win.flip()
@@ -746,9 +852,20 @@ while True:
         awareness_response = keys[0].name
         break
 
+awareness_detail = ""
+if awareness_response == "y":
+    win.mouseVisible = True
+    detail_dlg = gui.Dlg(title="פירוט")
+    detail_dlg.addText("מה הבחנת? נסה/י לתאר בקצרה.")
+    detail_dlg.addField("תיאור:", "")
+    detail_dlg.show()
+    if detail_dlg.OK and detail_dlg.data:
+        awareness_detail = str(detail_dlg.data[0]).strip()
+    win.mouseVisible = False
+
 session_fields = [
-    "participant", "age", "vision", "condition", "n_back_level", "asrt_sequence",
-    "timestamp", "awareness_response"
+    "participant", "age", "gender", "adhd", "condition", "n_back_level", "asrt_sequence",
+    "timestamp", "awareness_response", "awareness_detail"
 ]
 with open(session_path, "w", newline="", encoding="utf-8-sig") as sf:
     session_writer = csv.DictWriter(sf, fieldnames=session_fields)
@@ -756,12 +873,14 @@ with open(session_path, "w", newline="", encoding="utf-8-sig") as sf:
     session_writer.writerow({
         "participant": participant,
         "age": age,
-        "vision": vision,
+        "gender": gender,
+        "adhd": adhd,
         "condition": condition,
         "n_back_level": n_back_level,
         "asrt_sequence": ASRT_SEQUENCE_STR,
         "timestamp": timestamp,
         "awareness_response": awareness_response,
+        "awareness_detail": awareness_detail,
     })
 
 # =========================
