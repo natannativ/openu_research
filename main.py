@@ -540,7 +540,7 @@ def show_nback_practice_feedback(nback_target, nback_response):
     if nback_target == 1 and nback_response == 1:
         txt, col = "זיהית נכון! (רווח)", "lime"
     elif nback_target == 1 and nback_response == 0:
-        txt, col = "פספסת — האות חזרה, היה צריך ללחוץ רווח", "red"
+        txt, col = "פספסת — האות חזרה, היה צריך ללחוץ רווח. מתחילים לספור מחדש", "red"
     elif nback_target == 0 and nback_response == 1:
         txt, col = "לחיצה מיותרת — האות לא חזרה", "orange"
     else:
@@ -618,10 +618,11 @@ def run_practice_once():
     rts = []
     nb_targets = 0
     nb_hits = 0
+    nback_anchor = 0  # n-back counting restarts here after a missed target
 
     for trial_idx in range(N_PRACTICE_TRIALS):
         present_pre_target(trial_idx == 0)
-        nb_target = int(is_nback_target(practice_nback, trial_idx))
+        nb_target = int(is_nback_target(practice_nback, trial_idx, nback_anchor))
         result = run_asrt_nback_trial(practice_positions[trial_idx], practice_nback[trial_idx])
 
         correct_count += result["asrt_correct"]
@@ -633,6 +634,11 @@ def run_practice_once():
 
         if PRACTICE_NBACK_FEEDBACK:
             show_nback_practice_feedback(nb_target, result["nback_response"])
+
+        # Reset the n-back stream after a missed target, as in the real task.
+        if nb_target == 1 and result["nback_response"] == 0:
+            nback_anchor = trial_idx + 1
+            reset_nback_window(practice_nback, trial_idx + 1, n_back_level)
 
         draw_placeholders()
         win.flip()
