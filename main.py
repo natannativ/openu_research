@@ -33,9 +33,12 @@ INITIAL_DELAY = 1.0            # before the first stim of each block (s)
 NBACK_RESPONSE_WINDOW = 1.2    # fixed window from letter onset to press SPACE (s)
 ASRT_MAX_ATTEMPTS = 15         # safety cap on the correction loop
 NBACK_WARNING_THRESHOLD = 0.5  # warn if block n-back hit rate falls below this
+NBACK_RESET_GRACE = 2          # extra non-target letters after a miss reset (settling time)
 PRACTICE_NBACK_FEEDBACK = True
-PRACTICE_MIN_ASRT_ACC = 0.60   # repeat practice if ASRT accuracy is below this
-PRACTICE_MIN_NBACK_HIT = 0.50  # ...or if the n-back hit rate is below this
+# Repeat practice only on near-total failure (lenient on purpose).
+PRACTICE_MIN_ASRT_ACC = 0.40   # repeat practice if ASRT accuracy is below this
+PRACTICE_MIN_NBACK_HIT = 0.25  # ...or if the n-back hit rate (targets caught) is below this
+PRACTICE_MAX_NBACK_FA = 0.50   # ...or if the n-back false-alarm rate is above this
 PRACTICE_MAX_ATTEMPTS = 3      # cap on practice repeats
 SHOW_BLOCK_FEEDBACK = True
 PROBE_SCALE = ["1", "2", "3", "4"]
@@ -456,11 +459,14 @@ def is_nback_target(letters, index, anchor=0):
             and index - anchor >= n_back_level
             and letters[index] == letters[index - n_back_level])
 
-def reset_nback_window(letters, start, n_back):
-    # After a reset, force the next n_back letters to be non-repeats so there is
-    # no confusing visual repeat before the participant has rebuilt the stream.
-    for j in range(start, min(start + n_back, len(letters))):
-        ref = letters[j - n_back]
+def reset_nback_window(letters, start, count):
+    # After a reset, force the next `count` letters to NOT repeat the letter
+    # n_back_level back, so none of them can be a target. This gives the
+    # participant settling time to rebuild the stream after the disruption.
+    for j in range(start, min(start + count, len(letters))):
+        if j - n_back_level < 0:
+            continue
+        ref = letters[j - n_back_level]
         if letters[j] == ref:
             letters[j] = random.choice([s for s in NBACK_STIMULI if s != ref])
 
@@ -534,22 +540,26 @@ def show_feedback(title, accuracy_pct, mean_rt_ms, nback_stats=None):
     wait_for_response_key()
 
 def show_nback_practice_feedback(nback_target, nback_response):
-    # No feedback for correct rejections (non-target, no press) to keep pace.
+    # Returns True if a feedback flash was shown. Because the flash interrupts the
+    # memory stream, the caller resets the n-back count after ANY feedback, so the
+    # participant never has to remember letters from before the interruption.
+    # No feedback for correct rejections (non-target, no press) — they never interrupt.
     if n_back_level < 1:
-        return
+        return False
     if nback_target == 1 and nback_response == 1:
-        txt, col = "זיהית נכון! (רווח)", "lime"
+        txt, col = "זיהית נכון! (רווח). מתחילים לספור מחדש", "lime"
     elif nback_target == 1 and nback_response == 0:
         txt, col = "פספסת — האות חזרה, היה צריך ללחוץ רווח. מתחילים לספור מחדש", "red"
     elif nback_target == 0 and nback_response == 1:
-        txt, col = "לחיצה מיותרת — האות לא חזרה", "orange"
+        txt, col = "לחיצה מיותרת — האות לא חזרה. מתחילים לספור מחדש", "orange"
     else:
-        return
+        return False
     nback_practice_fb.color = col
     nback_practice_fb.text = rtl(txt)
     nback_practice_fb.draw()
     win.flip()
     core.wait(0.9)
+    return True
 
 PROBE_SETTLE = 0.35  # ignore keys this long so a previous answer can't carry over (s)
 
@@ -618,7 +628,9 @@ def run_practice_once():
     rts = []
     nb_targets = 0
     nb_hits = 0
-    nback_anchor = 0  # n-back counting restarts here after a missed target
+    nb_nontargets = 0
+    nb_false_alarms = 0
+    nback_anchor = 0  # n-back counting restarts here after any feedback flash
 
     for trial_idx in range(N_PRACTICE_TRIALS):
         present_pre_target(trial_idx == 0)
@@ -631,28 +643,42 @@ def run_practice_once():
         if nb_target:
             nb_targets += 1
             nb_hits += int(result["nback_response"] == 1)
+        else:
+            nb_nontargets += 1
+            nb_false_alarms += int(result["nback_response"] == 1)
 
+        fb_shown = False
         if PRACTICE_NBACK_FEEDBACK:
-            show_nback_practice_feedback(nb_target, result["nback_response"])
+            fb_shown = show_nback_practice_feedback(nb_target, result["nback_response"])
 
-        # Reset the n-back stream after a missed target, as in the real task.
-        if nb_target == 1 and result["nback_response"] == 0:
+        # Any feedback flash interrupts the memory stream, so reset the n-back
+        # count afterward (covers correct hits, misses, and false alarms).
+        if fb_shown:
             nback_anchor = trial_idx + 1
-            reset_nback_window(practice_nback, trial_idx + 1, n_back_level)
+            reset_nback_window(practice_nback, trial_idx + 1, n_back_level + NBACK_RESET_GRACE)
 
         draw_placeholders()
         win.flip()
 
-    asrt_acc = correct_count / N_PRACTICE_TRIALS
-    nb_hit_rate = (nb_hits / nb_targets) if nb_targets > 0 else 1.0
-    mean_rt_ms = round(sum(rts) / len(rts) * 1000) if rts else 0
-    return asrt_acc, nb_hit_rate, mean_rt_ms
+    return {
+        "asrt_acc": correct_count / N_PRACTICE_TRIALS,
+        "mean_rt_ms": round(sum(rts) / len(rts) * 1000) if rts else 0,
+        "nb_targets": nb_targets,
+        "nb_hits": nb_hits,
+        "nb_misses": nb_targets - nb_hits,
+        "nb_false_alarms": nb_false_alarms,
+        "nb_hit_rate": (nb_hits / nb_targets) if nb_targets > 0 else 1.0,
+        "nb_fa_rate": (nb_false_alarms / nb_nontargets) if nb_nontargets > 0 else 0.0,
+    }
 
-def practice_passed(asrt_acc, nb_hit_rate):
-    if asrt_acc < PRACTICE_MIN_ASRT_ACC:
+def practice_passed(stats):
+    if stats["asrt_acc"] < PRACTICE_MIN_ASRT_ACC:
         return False
-    if n_back_level >= 1 and nb_hit_rate < PRACTICE_MIN_NBACK_HIT:
-        return False
+    if n_back_level >= 1:
+        if stats["nb_targets"] > 0 and stats["nb_hit_rate"] < PRACTICE_MIN_NBACK_HIT:
+            return False
+        if stats["nb_fa_rate"] > PRACTICE_MAX_NBACK_FA:
+            return False
     return True
 
 for practice_attempt in range(1, PRACTICE_MAX_ATTEMPTS + 1):
@@ -660,12 +686,17 @@ for practice_attempt in range(1, PRACTICE_MAX_ATTEMPTS + 1):
     win.flip()
     wait_for_response_key()
 
-    asrt_acc, nb_hit_rate, mean_rt_ms = run_practice_once()
+    stats = run_practice_once()
 
     if SHOW_BLOCK_FEEDBACK:
-        show_feedback("סיום התרגול", round(asrt_acc * 100), mean_rt_ms)
+        nb_stats = None
+        if n_back_level >= 1:
+            nb_stats = (stats["nb_targets"], stats["nb_hits"],
+                        stats["nb_misses"], stats["nb_false_alarms"])
+        show_feedback("סיום התרגול", round(stats["asrt_acc"] * 100),
+                      stats["mean_rt_ms"], nb_stats)
 
-    if practice_passed(asrt_acc, nb_hit_rate) or practice_attempt == PRACTICE_MAX_ATTEMPTS:
+    if practice_passed(stats) or practice_attempt == PRACTICE_MAX_ATTEMPTS:
         break
 
     practice_retry_text.text = rtl(
@@ -815,7 +846,7 @@ for block in range(1, N_BLOCKS + 1):
         if this_trial_gated:
             show_nback_miss_gate()
             nback_anchor = trial_idx + 1
-            reset_nback_window(block_nback, trial_idx + 1, n_back_level)
+            reset_nback_window(block_nback, trial_idx + 1, n_back_level + NBACK_RESET_GRACE)
         prev_trial_gated = this_trial_gated
 
     probe_focus = run_probe(
@@ -916,16 +947,25 @@ while True:
         awareness_response = keys[0].name
         break
 
+# =========================
+# END (shown before closing the window)
+# =========================
+end_text.draw()
+win.flip()
+wait_for_space()
+
+# Close the window BEFORE the free-text dialog: a system dialog opened over a
+# fullscreen window can hide behind it and look frozen (reported by participants).
+win.close()
+
 awareness_detail = ""
 if awareness_response == "y":
-    win.mouseVisible = True
     detail_dlg = gui.Dlg(title="פירוט")
     detail_dlg.addText("מה הבחנת? נסה/י לתאר בקצרה.")
     detail_dlg.addField("תיאור:", "")
     detail_dlg.show()
     if detail_dlg.OK and detail_dlg.data:
         awareness_detail = str(detail_dlg.data[0]).strip()
-    win.mouseVisible = False
 
 session_fields = [
     "participant", "age", "gender", "adhd", "condition", "n_back_level", "asrt_sequence",
@@ -947,12 +987,4 @@ with open(session_path, "w", newline="", encoding="utf-8-sig") as sf:
         "awareness_detail": awareness_detail,
     })
 
-# =========================
-# END
-# =========================
-end_text.draw()
-win.flip()
-wait_for_space()
-
-win.close()
 core.quit()
