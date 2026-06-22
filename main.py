@@ -34,6 +34,9 @@ NBACK_RESPONSE_WINDOW = 1.2    # fixed window from letter onset to press SPACE (
 ASRT_MAX_ATTEMPTS = 15         # safety cap on the correction loop
 NBACK_WARNING_THRESHOLD = 0.5  # warn if block n-back hit rate falls below this
 PRACTICE_NBACK_FEEDBACK = True
+PRACTICE_MIN_ASRT_ACC = 0.60   # repeat practice if ASRT accuracy is below this
+PRACTICE_MIN_NBACK_HIT = 0.50  # ...or if the n-back hit rate is below this
+PRACTICE_MAX_ATTEMPTS = 3      # cap on practice repeats
 SHOW_BLOCK_FEEDBACK = True
 PROBE_SCALE = ["1", "2", "3", "4"]
 
@@ -84,11 +87,11 @@ fullscreen = info["fullscreen"]
 n_back_level = 1 if condition == "low_load" else 2
 
 if n_back_level == 1:
-    nback_step_phrase = "לאות שהופיעה בניסיון הקודם"
+    nback_step_phrase = "לאות הקודמת"
 elif n_back_level == 2:
-    nback_step_phrase = "לאות שהופיעה שני ניסיונות אחורה"
+    nback_step_phrase = "לאות שהופיעה שתי אותיות אחורה"
 else:
-    nback_step_phrase = f"לאות שהופיעה {n_back_level} ניסיונות אחורה"
+    nback_step_phrase = f"לאות שהופיעה {n_back_level} אותיות אחורה"
 
 # Reproducible per-participant sequence; random for non-numeric ids.
 def select_asrt_sequence(participant_id):
@@ -252,6 +255,15 @@ practice_done_text = visual.TextStim(
     font=HEBREW_FONT
 )
 
+practice_retry_text = visual.TextStim(
+    win,
+    text="",
+    color="white",
+    height=0.04,
+    wrapWidth=1.4,
+    font=HEBREW_FONT
+)
+
 break_text = visual.TextStim(
     win,
     text="",
@@ -309,6 +321,7 @@ nback_miss_text = visual.TextStim(
         "פספסת את האות!\n\n"
         "האות חזרה ולא לחצת רווח.\n"
         "חשוב לעקוב אחרי האות במרכז המסך.\n\n"
+        "נתחיל לספור מחדש מהאות הבאה.\n\n"
         "לחצ/י על אחד ממקשי התגובה כדי להמשיך."
     ),
     color="red",
@@ -436,10 +449,20 @@ def get_nback_sequence(trial_types, n_back):
             seq.append(random.choice(non_targets))
     return seq
 
-def is_nback_target(letters, index):
+def is_nback_target(letters, index, anchor=0):
+    # A target needs n_back_level real letters since the last reset (anchor),
+    # so the stream restarts cleanly after a miss gate.
     return (n_back_level >= 1
-            and index >= n_back_level
+            and index - anchor >= n_back_level
             and letters[index] == letters[index - n_back_level])
+
+def reset_nback_window(letters, start, n_back):
+    # After a reset, force the next n_back letters to be non-repeats so there is
+    # no confusing visual repeat before the participant has rebuilt the stream.
+    for j in range(start, min(start + n_back, len(letters))):
+        ref = letters[j - n_back]
+        if letters[j] == ref:
+            letters[j] = random.choice([s for s in NBACK_STIMULI if s != ref])
 
 def build_high_triplets():
     # P-x-P where pattern positions are consecutive (wrap-around); middle is any.
@@ -457,7 +480,7 @@ def classify_triplet(prev2, prev1, current):
     if prev2 is None or prev1 is None:
         return "", "X"
     tri = (prev2, prev1, current)
-    tri_str = f"{tri[0]}-{tri[1]}-{tri[2]}"
+    tri_str = f"{tri[0]}_{tri[1]}_{tri[2]}"  # underscore so Excel won't read it as a date
     if tri in HIGH_TRIPLETS:
         tri_type = "H"
     elif tri[0] == tri[1] == tri[2]:
@@ -587,35 +610,66 @@ wait_for_space()
 # =========================
 # PRACTICE BLOCK (random positions, NOT saved)
 # =========================
-practice_instructions.draw()
-win.flip()
-wait_for_response_key()
+def run_practice_once():
+    practice_positions = [random.choice([1, 2, 3, 4]) for _ in range(N_PRACTICE_TRIALS)]
+    practice_nback = get_nback_sequence(["R"] * N_PRACTICE_TRIALS, n_back_level)
 
-practice_positions = [random.choice([1, 2, 3, 4]) for _ in range(N_PRACTICE_TRIALS)]
-practice_nback = get_nback_sequence(["R"] * N_PRACTICE_TRIALS, n_back_level)
+    correct_count = 0
+    rts = []
+    nb_targets = 0
+    nb_hits = 0
 
-practice_correct_count = 0
-practice_rts = []
+    for trial_idx in range(N_PRACTICE_TRIALS):
+        present_pre_target(trial_idx == 0)
+        nb_target = int(is_nback_target(practice_nback, trial_idx))
+        result = run_asrt_nback_trial(practice_positions[trial_idx], practice_nback[trial_idx])
 
-for trial_idx in range(N_PRACTICE_TRIALS):
-    present_pre_target(trial_idx == 0)
-    nb_target = int(is_nback_target(practice_nback, trial_idx))
-    result = run_asrt_nback_trial(practice_positions[trial_idx], practice_nback[trial_idx])
+        correct_count += result["asrt_correct"]
+        if result["asrt_correct"] and result["asrt_rt"] is not None:
+            rts.append(result["asrt_rt"])
+        if nb_target:
+            nb_targets += 1
+            nb_hits += int(result["nback_response"] == 1)
 
-    practice_correct_count += result["asrt_correct"]
-    if result["asrt_correct"] and result["asrt_rt"] is not None:
-        practice_rts.append(result["asrt_rt"])
+        if PRACTICE_NBACK_FEEDBACK:
+            show_nback_practice_feedback(nb_target, result["nback_response"])
 
-    if PRACTICE_NBACK_FEEDBACK:
-        show_nback_practice_feedback(nb_target, result["nback_response"])
+        draw_placeholders()
+        win.flip()
 
-    draw_placeholders()
+    asrt_acc = correct_count / N_PRACTICE_TRIALS
+    nb_hit_rate = (nb_hits / nb_targets) if nb_targets > 0 else 1.0
+    mean_rt_ms = round(sum(rts) / len(rts) * 1000) if rts else 0
+    return asrt_acc, nb_hit_rate, mean_rt_ms
+
+def practice_passed(asrt_acc, nb_hit_rate):
+    if asrt_acc < PRACTICE_MIN_ASRT_ACC:
+        return False
+    if n_back_level >= 1 and nb_hit_rate < PRACTICE_MIN_NBACK_HIT:
+        return False
+    return True
+
+for practice_attempt in range(1, PRACTICE_MAX_ATTEMPTS + 1):
+    practice_instructions.draw()
     win.flip()
+    wait_for_response_key()
 
-if SHOW_BLOCK_FEEDBACK:
-    practice_acc = round(practice_correct_count / N_PRACTICE_TRIALS * 100)
-    practice_mean_rt = round(sum(practice_rts) / len(practice_rts) * 1000) if practice_rts else 0
-    show_feedback("סיום התרגול", practice_acc, practice_mean_rt)
+    asrt_acc, nb_hit_rate, mean_rt_ms = run_practice_once()
+
+    if SHOW_BLOCK_FEEDBACK:
+        show_feedback("סיום התרגול", round(asrt_acc * 100), mean_rt_ms)
+
+    if practice_passed(asrt_acc, nb_hit_rate) or practice_attempt == PRACTICE_MAX_ATTEMPTS:
+        break
+
+    practice_retry_text.text = rtl(
+        "התרגול עוד לא הצליח מספיק.\n\n"
+        "נחזור עליו פעם נוספת כדי לוודא שהמטלה ברורה.\n\n"
+        "לחצ/י על אחד ממקשי התגובה כדי להתחיל שוב."
+    )
+    practice_retry_text.draw()
+    win.flip()
+    wait_for_response_key()
 
 practice_done_text.draw()
 win.flip()
@@ -682,6 +736,7 @@ for block in range(1, N_BLOCKS + 1):
 
     block_rows = []
     prev_trial_gated = False
+    nback_anchor = 0  # n-back counting restarts here after a miss gate
 
     for trial_idx in range(TRIALS_PER_BLOCK):
         global_trial_counter += 1
@@ -689,7 +744,7 @@ for block in range(1, N_BLOCKS + 1):
         asrt_pos = block_seq[trial_idx]
         asrt_key = POS_KEYS[asrt_pos]
         nback_letter = block_nback[trial_idx]
-        nback_target = int(is_nback_target(block_nback, trial_idx))
+        nback_target = int(is_nback_target(block_nback, trial_idx, nback_anchor))
 
         present_pre_target(trial_idx == 0)
         result = run_asrt_nback_trial(asrt_pos, nback_letter)
@@ -748,10 +803,13 @@ for block in range(1, N_BLOCKS + 1):
         draw_placeholders()
         win.flip()
 
-        # Gate on a missed target (no SPACE) before the next trial.
+        # Gate on a missed target (no SPACE) before the next trial, then reset
+        # the n-back stream so the participant starts counting fresh.
         this_trial_gated = (nback_target == 1 and nback_response == 0)
         if this_trial_gated:
             show_nback_miss_gate()
+            nback_anchor = trial_idx + 1
+            reset_nback_window(block_nback, trial_idx + 1, n_back_level)
         prev_trial_gated = this_trial_gated
 
     probe_focus = run_probe(
